@@ -1,11 +1,12 @@
 [package]
 name = "zono"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "A tiny cross-platform todo list, zero dependencies"
+description = "A tiny cross-platform todo list with GUI, written in Rust"
 license = "MIT"
 
 [dependencies]
+iced = { version = "0.12", features = ["debug"] }
 
 [profile.release]
 opt-level = "z"
