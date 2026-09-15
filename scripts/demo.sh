@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Launches the real compiled binary and captures its window as a PNG.
 #
-# Everything lands in dist/, which the workflow upload-artifact step
-# publishes with the binary:
-#   zono-ui-linux-x86_64.png   the screenshot
-#   zono-capture-log.txt       diagnostics for this capture
+# Outputs:
+#   dist/zono-ui-linux-x86_64.png   the screenshot (published with the release)
+#   docs/CI_CAPTURE_LOG.md          diagnostics, committed back to main
 #
 # Capture is best-effort: this script always exits 0.
 
@@ -13,20 +12,37 @@ set -uo pipefail
 BIN="${1:-./target/release/zono}"
 OS="$(uname -s)"
 
-mkdir -p dist
-LOG="dist/zono-capture-log.txt"
+mkdir -p dist docs
+LOG="docs/CI_CAPTURE_LOG.md"
 
 say() { echo "$*" | tee -a "$LOG"; }
 
-: > "$LOG"
+{
+  echo "# CI capture log"
+  echo
+  echo '```'
+} > "$LOG"
+
 say "== zono UI capture =="
 say "date   : $(date -u)"
 say "binary : $BIN"
 say "os     : $OS"
 
+finish() {
+  echo '```' >> "$LOG"
+  if [ "$OS" = "Linux" ]; then
+    git config user.name "github-actions[bot]" || true
+    git config user.email "41898282+github-actions[bot]@users.noreply.github.com" || true
+    git add "$LOG" || true
+    git commit -m "ci: capture log [skip ci]" || true
+    git push origin HEAD:main || echo "push failed (no credentials?)"
+  fi
+  exit 0
+}
+
 if [ ! -x "$BIN" ]; then
   say "FAIL: binary missing or not executable"
-  exit 0
+  finish
 fi
 
 say "size   : $(wc -c < "$BIN") bytes"
@@ -40,7 +56,7 @@ say "seeded 3 tasks (1 done)"
 
 if [ "$OS" != "Linux" ]; then
   say "SKIP: unattended capture only runs on Linux runners"
-  exit 0
+  finish
 fi
 
 say "-- installing capture tools --"
@@ -67,7 +83,6 @@ say "-- launching zono --"
 "$BIN" >/tmp/zono.log 2>&1 &
 APP_PID=$!
 
-# Poll for the window instead of guessing a fixed delay.
 WID=""
 for i in $(seq 1 20); do
   sleep 2
@@ -89,27 +104,26 @@ if [ -n "$WID" ]; then
   xdotool windowactivate "$WID" 2>/dev/null || true
   xdotool windowraise "$WID" 2>/dev/null || true
   sleep 2
-  import -window "$WID" "$SHOT" 2>>"$LOG" || import -window root "$SHOT" 2>>"$LOG" || true
+  import -window "$WID" "$SHOT" 2>/dev/null || import -window root "$SHOT" 2>/dev/null || true
 else
   say "no window matched, grabbing root"
-  import -window root "$SHOT" 2>>"$LOG" || true
+  import -window root "$SHOT" 2>/dev/null || true
 fi
 
 if [ -f "$SHOT" ]; then
   say "captured: $(wc -c < "$SHOT") bytes"
   say "identify: $(identify "$SHOT" 2>/dev/null)"
-  # A blank frame has a near-uniform histogram, so report the spread.
-  say "colours : $(identify -format '%k unique' "$SHOT" 2>/dev/null)"
+  say "colours : $(identify -format '%k unique colours' "$SHOT" 2>/dev/null)"
   say "stats   : $(identify -format 'mean=%[mean] sd=%[standard-deviation]' "$SHOT" 2>/dev/null)"
 else
   say "WARN: no screenshot produced"
 fi
 
-say "-- window list --"
-xdotool search --name '.*' getwindowname %@ 2>/dev/null | head -n 20 | tee -a "$LOG" || true
+say "-- windows on display --"
+xwininfo -root -children 2>/dev/null | head -n 25 | tee -a "$LOG" || true
 
 say "-- app stdout/stderr --"
-cat /tmp/zono.log 2>/dev/null | head -n 60 | tee -a "$LOG" || true
+head -n 60 /tmp/zono.log 2>/dev/null | tee -a "$LOG" || true
 
 say "-- xvfb log --"
 tail -n 15 /tmp/xvfb.log 2>/dev/null | tee -a "$LOG" || true
@@ -118,4 +132,4 @@ kill "$APP_PID" 2>/dev/null || true
 kill "$XVFB_PID" 2>/dev/null || true
 
 say "== capture finished =="
-exit 0
+finish
