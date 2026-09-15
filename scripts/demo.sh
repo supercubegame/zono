@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Launches the real compiled binary and captures its window as a PNG.
+# Launches the real compiled binary, captures its window, and proves what
+# rendered by running OCR over the result.
 #
 # Outputs:
 #   dist/zono-ui-linux-x86_64.png   the screenshot (published with the release)
-#   docs/CI_CAPTURE_LOG.md          diagnostics, committed back to main
+#   docs/CI_CAPTURE_LOG.md          diagnostics + OCR text, committed to main
 #
 # Capture is best-effort: this script always exits 0.
 
@@ -17,11 +18,7 @@ LOG="docs/CI_CAPTURE_LOG.md"
 
 say() { echo "$*" | tee -a "$LOG"; }
 
-{
-  echo "# CI capture log"
-  echo
-  echo '```'
-} > "$LOG"
+printf '# CI capture log\n\n```\n' > "$LOG"
 
 say "== zono UI capture =="
 say "date   : $(date -u)"
@@ -29,13 +26,14 @@ say "binary : $BIN"
 say "os     : $OS"
 
 finish() {
-  echo '```' >> "$LOG"
+  printf '```\n' >> "$LOG"
   if [ "$OS" = "Linux" ]; then
     git config user.name "github-actions[bot]" || true
     git config user.email "41898282+github-actions[bot]@users.noreply.github.com" || true
     git add "$LOG" || true
-    git commit -m "ci: capture log [skip ci]" || true
-    git push origin HEAD:main || echo "push failed (no credentials?)"
+    git commit -m "ci: publish capture log and OCR result [skip" -m "ci]" || true
+    git pull --rebase --autostash origin main || true
+    git push origin HEAD:main || say "push failed"
   fi
   exit 0
 }
@@ -61,8 +59,8 @@ fi
 
 say "-- installing capture tools --"
 sudo apt-get update -qq >/dev/null 2>&1 || true
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xvfb imagemagick xdotool x11-utils libegl1 libgl1 libgl1-mesa-dri libxkbcommon-x11-0 >/dev/null 2>&1 || true
-for t in Xvfb import xdotool xwininfo; do
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xvfb imagemagick xdotool x11-utils tesseract-ocr libegl1 libgl1 libgl1-mesa-dri libxkbcommon-x11-0 >/dev/null 2>&1 || true
+for t in Xvfb import xdotool tesseract; do
   command -v "$t" >/dev/null && say "tool ok   : $t" || say "tool MISS : $t"
 done
 
@@ -111,22 +109,21 @@ else
 fi
 
 if [ -f "$SHOT" ]; then
-  say "captured: $(wc -c < "$SHOT") bytes"
-  say "identify: $(identify "$SHOT" 2>/dev/null)"
-  say "colours : $(identify -format '%k unique colours' "$SHOT" 2>/dev/null)"
-  say "stats   : $(identify -format 'mean=%[mean] sd=%[standard-deviation]' "$SHOT" 2>/dev/null)"
+  say "captured : $(wc -c < "$SHOT") bytes"
+  say "identify : $(identify "$SHOT" 2>/dev/null)"
+  say "colours  : $(identify -format '%k unique colours' "$SHOT" 2>/dev/null)"
+  say "stats    : $(identify -format 'mean=%[mean] sd=%[standard-deviation]' "$SHOT" 2>/dev/null)"
+
+  say "-- OCR of the captured window --"
+  # Upscale first, the UI font is small and OCR does better on a 2x image.
+  convert "$SHOT" -resize 200% -colorspace gray -normalize /tmp/ocr.png 2>/dev/null || cp "$SHOT" /tmp/ocr.png
+  tesseract /tmp/ocr.png stdout 2>/dev/null | sed '/^[[:space:]]*$/d' | head -n 30 | tee -a "$LOG" || say "OCR unavailable"
 else
   say "WARN: no screenshot produced"
 fi
 
-say "-- windows on display --"
-xwininfo -root -children 2>/dev/null | head -n 25 | tee -a "$LOG" || true
-
 say "-- app stdout/stderr --"
-head -n 60 /tmp/zono.log 2>/dev/null | tee -a "$LOG" || true
-
-say "-- xvfb log --"
-tail -n 15 /tmp/xvfb.log 2>/dev/null | tee -a "$LOG" || true
+head -n 40 /tmp/zono.log 2>/dev/null | tee -a "$LOG" || true
 
 kill "$APP_PID" 2>/dev/null || true
 kill "$XVFB_PID" 2>/dev/null || true
