@@ -1,10 +1,9 @@
-// zono v0.2.0 - a tiny cross-platform todo list with GUI
-// Built with iced: native Windows (WinForms), macOS (Cocoa), and Linux (GTK) UIs
+// zono v0.2.1 - a tiny cross-platform todo list with a GUI
+// Built with iced 0.12 (Sandbox API): native Win32, Cocoa and X11/Wayland windows.
 
-use iced::{
-    alignment, button, container, text, text_input, Alignment, Button, Column, Command,
-    Container, Element, Length, Row, Sandbox, Settings, Text, TextInput, Application,
-};
+use iced::widget::{Button, Column, Container, Row, Scrollable, Text, TextInput};
+use iced::{Alignment, Element, Length, Sandbox, Settings};
+
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -33,6 +32,7 @@ fn data_file() -> PathBuf {
     path
 }
 
+// Same tab-separated format the CLI version used, so data carries over.
 fn load() -> Vec<Task> {
     let mut tasks = Vec::new();
     if let Ok(text) = fs::read_to_string(data_file()) {
@@ -74,11 +74,6 @@ fn next_id(tasks: &[Task]) -> u32 {
 struct Zono {
     tasks: Vec<Task>,
     input: String,
-    input_state: text_input::State,
-    add_btn_state: button::State,
-    delete_btn_states: Vec<button::State>,
-    toggle_btn_states: Vec<button::State>,
-    clear_btn_state: button::State,
 }
 
 #[derive(Debug, Clone)]
@@ -94,17 +89,9 @@ impl Sandbox for Zono {
     type Message = Message;
 
     fn new() -> Self {
-        let tasks = load();
-        let delete_btn_states = vec![button::State::new(); tasks.len()];
-        let toggle_btn_states = vec![button::State::new(); tasks.len()];
         Self {
-            tasks,
+            tasks: load(),
             input: String::new(),
-            input_state: text_input::State::new(),
-            add_btn_state: button::State::new(),
-            delete_btn_states,
-            toggle_btn_states,
-            clear_btn_state: button::State::new(),
         }
     }
 
@@ -118,16 +105,15 @@ impl Sandbox for Zono {
                 self.input = value;
             }
             Message::AddTask => {
-                if !self.input.trim().is_empty() {
+                let title = self.input.trim().to_string();
+                if !title.is_empty() {
                     let id = next_id(&self.tasks);
                     self.tasks.push(Task {
                         id,
                         done: false,
-                        title: self.input.trim().to_string(),
+                        title,
                     });
                     self.input.clear();
-                    self.delete_btn_states.push(button::State::new());
-                    self.toggle_btn_states.push(button::State::new());
                     let _ = save(&self.tasks);
                 }
             }
@@ -139,98 +125,92 @@ impl Sandbox for Zono {
             }
             Message::DeleteTask(id) => {
                 self.tasks.retain(|t| t.id != id);
-                self.delete_btn_states.pop();
-                self.toggle_btn_states.pop();
                 let _ = save(&self.tasks);
             }
             Message::ClearDone => {
-                let before = self.tasks.len();
                 self.tasks.retain(|t| !t.done);
-                let diff = before - self.tasks.len();
-                self.delete_btn_states.truncate(self.tasks.len());
-                self.toggle_btn_states.truncate(self.tasks.len());
                 let _ = save(&self.tasks);
             }
         }
     }
 
-    fn view(&mut self) -> Element<Message> {
-        let title = Text::new("zono").size(32);
-        let subtitle = Text::new("v0.2.0 - todo list with GUI").size(14);
+    fn view(&self) -> Element<Message> {
+        let header = Column::new()
+            .push(Text::new("zono").size(34))
+            .push(Text::new("v0.2.1 - todo list with GUI").size(14))
+            .spacing(2);
 
-        let input = TextInput::new(
-            &mut self.input_state,
-            "Add a new task...",
-            &self.input,
-            Message::InputChanged,
-        )
-        .padding(10);
+        let input = TextInput::new("Add a new task...", &self.input)
+            .on_input(Message::InputChanged)
+            .on_submit(Message::AddTask)
+            .padding(10)
+            .size(16);
 
-        let add_btn = Button::new(&mut self.add_btn_state, Text::new("Add"))
-            .on_press(Message::AddTask)
-            .padding(10);
+        let input_row = Row::new()
+            .push(input)
+            .push(
+                Button::new(Text::new("Add").size(16))
+                    .on_press(Message::AddTask)
+                    .padding(10),
+            )
+            .spacing(8)
+            .align_items(Alignment::Center);
 
-        let input_row = Row::new().push(input).push(add_btn).spacing(10);
-
-        let mut task_list = Column::new().spacing(8).padding(10);
+        let mut list = Column::new().spacing(6);
 
         if self.tasks.is_empty() {
-            task_list = task_list.push(Text::new("No tasks yet. Add one above!"));
+            list = list.push(Text::new("No tasks yet. Add one above.").size(15));
         } else {
-            for (idx, task) in self.tasks.iter().enumerate() {
-                let checkbox = Button::new(
-                    &mut self.toggle_btn_states[idx],
-                    Text::new(if task.done { "✓" } else { "○" }),
-                )
-                .on_press(Message::ToggleTask(task.id))
-                .padding(5);
+            for task in &self.tasks {
+                let box_label = if task.done { "[x]" } else { "[ ]" };
 
-                let task_text = if task.done {
-                    Text::new(&task.title).size(16)
-                } else {
-                    Text::new(&task.title).size(16)
-                };
-
-                let delete_btn = Button::new(
-                    &mut self.delete_btn_states[idx],
-                    Text::new("🗑"),
-                )
-                .on_press(Message::DeleteTask(task.id))
-                .padding(5);
-
-                let task_row = Row::new()
-                    .push(checkbox)
-                    .push(task_text)
-                    .push(delete_btn)
-                    .spacing(10)
+                let row = Row::new()
+                    .push(
+                        Button::new(Text::new(box_label).size(15))
+                            .on_press(Message::ToggleTask(task.id))
+                            .padding(6),
+                    )
+                    .push(
+                        Container::new(Text::new(&task.title).size(16))
+                            .width(Length::Fill)
+                            .padding(4),
+                    )
+                    .push(
+                        Button::new(Text::new("Del").size(14))
+                            .on_press(Message::DeleteTask(task.id))
+                            .padding(6),
+                    )
+                    .spacing(8)
                     .align_items(Alignment::Center);
 
-                task_list = task_list.push(task_row);
+                list = list.push(row);
             }
         }
 
-        let done_count = self.tasks.iter().filter(|t| t.done).count();
-        let total_count = self.tasks.len();
-        let progress = Text::new(format!("{} of {} done", done_count, total_count)).size(14);
-
-        let clear_btn = Button::new(&mut self.clear_btn_state, Text::new("Clear Finished"))
-            .on_press(Message::ClearDone)
-            .padding(10);
+        let done = self.tasks.iter().filter(|t| t.done).count();
+        let total = self.tasks.len();
 
         let footer = Row::new()
-            .push(progress)
-            .push(clear_btn)
-            .spacing(20)
-            .padding(10);
+            .push(
+                Container::new(Text::new(format!("{} of {} done", done, total)).size(14))
+                    .width(Length::Fill),
+            )
+            .push(
+                Button::new(Text::new("Clear Finished").size(14))
+                    .on_press(Message::ClearDone)
+                    .padding(8),
+            )
+            .spacing(10)
+            .align_items(Alignment::Center);
 
         let content = Column::new()
-            .push(title)
-            .push(subtitle)
+            .push(header)
             .push(input_row)
-            .push(task_list)
+            .push(Scrollable::new(list).height(Length::Fill))
             .push(footer)
-            .spacing(15)
-            .padding(20);
+            .spacing(16)
+            .padding(22)
+            .max_width(520);
 
         Container::new(content)
             .width(Length::Fill)
