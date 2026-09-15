@@ -1,0 +1,13 @@
+[package]
+name = "zono"
+version = "0.1.0"
+edition = "2021"
+description = "A tiny cross-platform todo list, zero dependencies"
+license = "MIT"
+
+[dependencies]
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true

@@ -1,0 +1,91 @@
+# Move this file to .github/workflows/release.yml to enable automated
+# cross-platform builds and a published GitHub release.
+# It needs no secrets: the built-in GITHUB_TOKEN is enough.
+
+name: build-and-release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  demo:
+    name: capture UI session
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --release
+      - name: Run the app and capture its screen output
+        run: |
+          mkdir -p docs
+          chmod +x scripts/demo.sh
+          ./scripts/demo.sh ./target/release/zono > docs/demo-session.txt
+          cat docs/demo-session.txt
+      - name: Commit the captured session
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/demo-session.txt
+          git diff --staged --quiet || git commit -m "chore: capture live UI session [skip ci]"
+          git push
+
+  build:
+    name: build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x86_64
+            bin: zono
+          - os: macos-latest
+            label: macos-arm64
+            bin: zono
+          - os: windows-latest
+            label: windows-x86_64
+            bin: zono.exe
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release binary
+        run: cargo build --release
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ "${{ matrix.bin }}" = "zono.exe" ]; then
+            cp target/release/zono.exe "dist/zono-${{ matrix.label }}.exe"
+          else
+            cp target/release/zono "dist/zono-${{ matrix.label }}"
+          fi
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zono-${{ matrix.label }}
+          path: dist/*
+
+  release:
+    name: publish release
+    needs: [ build ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Flatten artifacts
+        run: |
+          mkdir -p dist
+          find artifacts -type f -exec cp {} dist/ \;
+          ls -l dist
+      - name: Publish v0.1.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete v0.1.0 --yes --cleanup-tag || true
+          gh release create v0.1.0 dist/* --title "zono v0.1.0" --notes "First release of zono, a zero-dependency cross-platform todo list written in Rust. Prebuilt binaries for Linux x86_64, macOS arm64 and Windows x86_64."
